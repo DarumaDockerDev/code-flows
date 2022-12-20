@@ -122,6 +122,47 @@ pub fn set_flows(
     }
 }
 
+pub fn set_error_log(
+    error_log_ptr: usize,
+    error_log_len_ptr: usize,
+) -> impl Fn(CallingFrame, Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> + Send + Sync + 'static
+{
+    move |frame: wasmedge_sdk::CallingFrame, args: Vec<wasmedge_sdk::WasmValue>| {
+        let caller = Caller::new(frame);
+        if args.len() != 2 {
+            return Err(HostFuncError::User(1));
+        }
+
+        let ptr = if args[0].ty() == ValType::I32 {
+            args[0].to_i32()
+        } else {
+            return Err(HostFuncError::User(2));
+        };
+
+        let len = if args[1].ty() == ValType::I32 {
+            args[1].to_i32()
+        } else {
+            return Err(HostFuncError::User(2));
+        };
+
+        let error_log = caller
+            .memory(0)
+            .unwrap()
+            .read_string(ptr as u32, len as u32)
+            .unwrap();
+
+        unsafe {
+            let bytes = error_log.as_bytes();
+            std::ptr::write(error_log_len_ptr as *mut u8, bytes.len() as u8);
+            for n in 0..bytes.len() {
+                std::ptr::write((error_log_ptr + n) as *mut u8, bytes[n]);
+            }
+        }
+
+        Ok(vec![])
+    }
+}
+
 #[async_host_function]
 pub async fn redirect_to(
     caller: Caller,

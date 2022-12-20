@@ -71,6 +71,10 @@ async fn run_wasm(wp: WasmParams) -> Result<(), Box<dyn std::error::Error>> {
             "set_flows",
             host_func::set_flows(wp.flows_ptr, wp.flows_len_ptr),
         )?
+        .with_func::<(i32, i32), ()>(
+            "set_error_log",
+            host_func::set_error_log(wp.error_log_ptr, wp.error_log_len_ptr),
+        )?
         .build("env")?;
 
     let config = ConfigBuilder::new(CommonConfigOptions::default())
@@ -94,6 +98,8 @@ struct WasmParams {
     event_body: Arc<Bytes>,
     flows_ptr: usize,
     flows_len_ptr: usize,
+    error_log_ptr: usize,
+    error_log_len_ptr: usize,
     wasm_file: String,
     wasm_func: String,
 }
@@ -109,17 +115,30 @@ async fn prepare(Query(v): Query<Value>) -> impl IntoResponse {
         Ok(f) => f,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
+    let mut error_log = Vec::<u8>::with_capacity(1000);
+    let mut error_log_len = vec![0 as u8];
     let wp = WasmParams {
         flows_user: v["flows_user"].as_str().unwrap().to_string(),
         flow_id: v["flow_id"].as_str().unwrap().to_string(),
         event_body: Arc::new(Bytes::new()),
         flows_ptr: 0,
         flows_len_ptr: 0,
+        error_log_ptr: error_log.as_mut_ptr() as usize,
+        error_log_len_ptr: error_log_len.as_mut_ptr() as usize,
         wasm_file,
         wasm_func: String::from("prepare"),
     };
     match run_wasm(wp).await {
-        Ok(_) => (StatusCode::OK, String::new()),
+        Ok(_) => match error_log_len[0] > 0 {
+            true => unsafe {
+                error_log.set_len(error_log_len[0] as usize);
+                (
+                    StatusCode::BAD_REQUEST,
+                    String::from_utf8_lossy(&error_log).into_owned(),
+                )
+            },
+            false => (StatusCode::OK, String::new()),
+        },
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -135,12 +154,16 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
         let wasm_dir = std::env::var("WASM_DIR").unwrap();
         let mut flows = Vec::<u8>::with_capacity(1000);
         let mut flows_len = vec![0 as u8];
+        let mut error_log = Vec::<u8>::with_capacity(1000);
+        let mut error_log_len = vec![0 as u8];
         let wp = WasmParams {
             flows_user: String::new(),
             flow_id: String::new(),
             event_body: bytes.clone(),
             flows_ptr: flows.as_mut_ptr() as usize,
             flows_len_ptr: flows_len.as_mut_ptr() as usize,
+            error_log_ptr: error_log.as_mut_ptr() as usize,
+            error_log_len_ptr: error_log_len.as_mut_ptr() as usize,
             wasm_file: [
                 wasm_dir,
                 String::from("apps"),
@@ -168,6 +191,8 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
                         Ok(f) => f,
                         Err(_) => continue,
                     };
+                    let mut error_log = Vec::<u8>::with_capacity(1000);
+                    let mut error_log_len = vec![0 as u8];
                     let wp = WasmParams {
                         flows_user: flow.flows_user,
                         wasm_file,
@@ -175,6 +200,8 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
                         event_body: bytes.clone(),
                         flows_ptr: 0,
                         flows_len_ptr: 0,
+                        error_log_ptr: error_log.as_mut_ptr() as usize,
+                        error_log_len_ptr: error_log_len.as_mut_ptr() as usize,
                         wasm_func: String::from("work"),
                     };
                     _ = run_wasm(wp).await;
