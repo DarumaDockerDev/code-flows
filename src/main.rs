@@ -6,13 +6,16 @@ use axum::{
     routing::post,
     Router,
 };
+use log::info;
 use serde::Deserialize;
 use serde_json::Value;
 use std::fs::File;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{PathBuf, MAIN_SEPARATOR};
 use std::process::{Command, ExitStatus};
 use std::sync::Arc;
+use std::time::SystemTime;
 use wasmedge_sdk::{
     config::{CommonConfigOptions, ConfigBuilder, HostRegistrationConfigOptions},
     params, ImportObjectBuilder, Module, PluginManager, Vm,
@@ -191,12 +194,13 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
                         Ok(f) => f,
                         Err(_) => continue,
                     };
+                    let flow_id = flow.flow_id.clone();
                     let mut error_log = Vec::<u8>::with_capacity(1000);
                     let mut error_log_len = vec![0 as u8];
                     let wp = WasmParams {
                         flows_user: flow.flows_user,
                         wasm_file,
-                        flow_id: flow.flow_id,
+                        flow_id: flow_id,
                         event_body: bytes.clone(),
                         flows_ptr: 0,
                         flows_len_ptr: 0,
@@ -204,7 +208,23 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
                         error_log_len_ptr: error_log_len.as_mut_ptr() as usize,
                         wasm_func: String::from("work"),
                     };
+                    info!(
+                        r#""msg": {:?}, "flow": {:?}, "function": {:?}"#,
+                        "Running function", flow.flow_id, "work"
+                    );
                     _ = run_wasm(wp).await;
+                    if error_log_len[0] > 0 {
+                        unsafe {
+                            error_log.set_len(error_log_len[0] as usize);
+                        }
+                        info!(
+                            r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
+                            "function returned with error",
+                            flow.flow_id,
+                            "work",
+                            String::from_utf8_lossy(&error_log).into_owned()
+                        );
+                    }
                 }
             }
         }
@@ -214,6 +234,27 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::builder()
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                r#"{{"level": {:?}, "ts": {:?}, {}}}"#,
+                record.level().as_str(),
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64(),
+                record.args(),
+            )
+        })
+        .target(env_logger::Target::Pipe(Box::new(
+            File::options()
+                .create(true)
+                .append(true)
+                .open(std::env::var("LOG_FILE").unwrap())
+                .unwrap(),
+        )))
+        .init();
     let app = Router::new()
         .route("/prepare", post(prepare))
         .route("/hook/:app/:handler", post(hook));

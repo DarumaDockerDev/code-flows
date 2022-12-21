@@ -1,4 +1,0 @@
-[env]
-WASM_DIR = '/home/darumadocker/wasm'
-AWS_S3_BUCKET = 'flow-function-wasms'
-CODE_FLOWS_PREFIX = 'http://127.0.0.1:8094'
