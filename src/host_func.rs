@@ -81,6 +81,39 @@ pub fn get_event_body(
     }
 }
 
+pub fn get_event_query_length(
+    l: i32,
+) -> impl Fn(CallingFrame, Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> + Send + Sync + 'static
+{
+    move |_frame: wasmedge_sdk::CallingFrame, _args: Vec<wasmedge_sdk::WasmValue>| {
+        Ok(vec![WasmValue::from_i32(l)])
+    }
+}
+
+pub fn get_event_query(
+    event_query: String,
+) -> impl Fn(CallingFrame, Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> + Send + Sync + 'static
+{
+    move |frame: wasmedge_sdk::CallingFrame, args: Vec<wasmedge_sdk::WasmValue>| {
+        let caller = Caller::new(frame);
+        if args.len() != 1 {
+            return Err(HostFuncError::User(1));
+        }
+
+        let ptr = if args[0].ty() == ValType::I32 {
+            args[0].to_i32()
+        } else {
+            return Err(HostFuncError::User(2));
+        };
+
+        _ = caller
+            .memory(0)
+            .unwrap()
+            .write(event_query.clone(), ptr as u32);
+        Ok(vec![WasmValue::from_i32(event_query.len() as i32)])
+    }
+}
+
 pub fn set_flows(
     flows_ptr: usize,
     flows_len_ptr: usize,
@@ -122,6 +155,47 @@ pub fn set_flows(
     }
 }
 
+pub fn set_output(
+    output_ptr: usize,
+    output_len_ptr: usize,
+) -> impl Fn(CallingFrame, Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> + Send + Sync + 'static
+{
+    move |frame: wasmedge_sdk::CallingFrame, args: Vec<wasmedge_sdk::WasmValue>| {
+        let caller = Caller::new(frame);
+        if args.len() != 2 {
+            return Err(HostFuncError::User(1));
+        }
+
+        let ptr = if args[0].ty() == ValType::I32 {
+            args[0].to_i32()
+        } else {
+            return Err(HostFuncError::User(2));
+        };
+
+        let len = if args[1].ty() == ValType::I32 {
+            args[1].to_i32()
+        } else {
+            return Err(HostFuncError::User(2));
+        };
+
+        let output = caller
+            .memory(0)
+            .unwrap()
+            .read_string(ptr as u32, len as u32)
+            .unwrap();
+
+        unsafe {
+            let bytes = output.as_bytes();
+            std::ptr::write(output_len_ptr as *mut u8, bytes.len() as u8);
+            for n in 0..bytes.len() {
+                std::ptr::write((output_ptr + n) as *mut u8, bytes[n]);
+            }
+        }
+
+        Ok(vec![])
+    }
+}
+
 pub fn set_error_log(
     error_log_ptr: usize,
     error_log_len_ptr: usize,
@@ -156,6 +230,47 @@ pub fn set_error_log(
             std::ptr::write(error_log_len_ptr as *mut u8, bytes.len() as u8);
             for n in 0..bytes.len() {
                 std::ptr::write((error_log_ptr + n) as *mut u8, bytes[n]);
+            }
+        }
+
+        Ok(vec![])
+    }
+}
+
+pub fn set_response(
+    response_ptr: usize,
+    response_len_ptr: usize,
+) -> impl Fn(CallingFrame, Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> + Send + Sync + 'static
+{
+    move |frame: wasmedge_sdk::CallingFrame, args: Vec<wasmedge_sdk::WasmValue>| {
+        let caller = Caller::new(frame);
+        if args.len() != 2 {
+            return Err(HostFuncError::User(1));
+        }
+
+        let ptr = if args[0].ty() == ValType::I32 {
+            args[0].to_i32()
+        } else {
+            return Err(HostFuncError::User(2));
+        };
+
+        let len = if args[1].ty() == ValType::I32 {
+            args[1].to_i32()
+        } else {
+            return Err(HostFuncError::User(2));
+        };
+
+        let response = caller
+            .memory(0)
+            .unwrap()
+            .read_string(ptr as u32, len as u32)
+            .unwrap();
+
+        unsafe {
+            let bytes = response.as_bytes();
+            std::ptr::write(response_len_ptr as *mut u8, bytes.len() as u8);
+            for n in 0..bytes.len() {
+                std::ptr::write((response_ptr + n) as *mut u8, bytes[n]);
             }
         }
 
