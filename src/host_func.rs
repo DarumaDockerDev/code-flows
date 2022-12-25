@@ -145,10 +145,17 @@ pub fn set_flows(
 
         unsafe {
             let bytes = flows.as_bytes();
-            std::ptr::write(flows_len_ptr as *mut u8, bytes.len() as u8);
+            std::ptr::write(flows_len_ptr as *mut usize, bytes.len());
+
+            let v: Vec<u8> = Vec::with_capacity(bytes.len());
+            let mut v = std::mem::ManuallyDrop::new(v);
+
+            let p = v.as_mut_ptr() as usize;
             for n in 0..bytes.len() {
-                std::ptr::write((flows_ptr + n) as *mut u8, bytes[n]);
+                std::ptr::write((p + n) as *mut u8, bytes[n]);
             }
+
+            std::ptr::write(flows_ptr as *mut usize, p);
         }
 
         Ok(vec![])
@@ -186,10 +193,17 @@ pub fn set_output(
 
         unsafe {
             let bytes = output.as_bytes();
-            std::ptr::write(output_len_ptr as *mut u8, bytes.len() as u8);
+            std::ptr::write(output_len_ptr as *mut usize, bytes.len());
+
+            let v: Vec<u8> = Vec::with_capacity(bytes.len());
+            let mut v = std::mem::ManuallyDrop::new(v);
+
+            let p = v.as_mut_ptr() as usize;
             for n in 0..bytes.len() {
-                std::ptr::write((output_ptr + n) as *mut u8, bytes[n]);
+                std::ptr::write((p + n) as *mut u8, bytes[n]);
             }
+
+            std::ptr::write(output_ptr as *mut usize, p);
         }
 
         Ok(vec![])
@@ -227,10 +241,17 @@ pub fn set_error_log(
 
         unsafe {
             let bytes = error_log.as_bytes();
-            std::ptr::write(error_log_len_ptr as *mut u8, bytes.len() as u8);
+            std::ptr::write(error_log_len_ptr as *mut usize, bytes.len());
+
+            let v: Vec<u8> = Vec::with_capacity(bytes.len());
+            let mut v = std::mem::ManuallyDrop::new(v);
+
+            let p = v.as_mut_ptr() as usize;
             for n in 0..bytes.len() {
-                std::ptr::write((error_log_ptr + n) as *mut u8, bytes[n]);
+                std::ptr::write((p + n) as *mut u8, bytes[n]);
             }
+
+            std::ptr::write(error_log_ptr as *mut usize, p);
         }
 
         Ok(vec![])
@@ -268,10 +289,17 @@ pub fn set_response(
 
         unsafe {
             let bytes = response.as_bytes();
-            std::ptr::write(response_len_ptr as *mut u8, bytes.len() as u8);
+            std::ptr::write(response_len_ptr as *mut usize, bytes.len());
+
+            let v: Vec<u8> = Vec::with_capacity(bytes.len());
+            let mut v = std::mem::ManuallyDrop::new(v);
+
+            let p = v.as_mut_ptr() as usize;
             for n in 0..bytes.len() {
-                std::ptr::write((response_ptr + n) as *mut u8, bytes[n]);
+                std::ptr::write((p + n) as *mut u8, bytes[n]);
             }
+
+            std::ptr::write(response_ptr as *mut usize, p);
         }
 
         Ok(vec![])

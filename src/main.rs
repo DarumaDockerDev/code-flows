@@ -140,10 +140,10 @@ async fn prepare(Query(v): Query<Value>) -> impl IntoResponse {
         Ok(f) => f,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
-    let mut error_log = Vec::<u8>::with_capacity(1000);
-    let mut error_log_len = vec![0 as u8];
-    let mut output = Vec::<u8>::with_capacity(1000);
-    let mut output_len = vec![0 as u8];
+    let mut error_log_ptr = vec![0 as usize];
+    let mut error_log_len = vec![0 as usize];
+    let mut output_ptr = vec![0 as usize];
+    let mut output_len = vec![0 as usize];
     let wp = WasmParams {
         flows_user: v["flows_user"].as_str().unwrap().to_string(),
         flow_id: v["flow_id"].as_str().unwrap().to_string(),
@@ -151,9 +151,9 @@ async fn prepare(Query(v): Query<Value>) -> impl IntoResponse {
         event_body: Arc::new(Bytes::new()),
         flows_ptr: 0,
         flows_len_ptr: 0,
-        error_log_ptr: error_log.as_mut_ptr() as usize,
+        error_log_ptr: error_log_ptr.as_mut_ptr() as usize,
         error_log_len_ptr: error_log_len.as_mut_ptr() as usize,
-        output_ptr: output.as_mut_ptr() as usize,
+        output_ptr: output_ptr.as_mut_ptr() as usize,
         output_len_ptr: output_len.as_mut_ptr() as usize,
         response_ptr: 0,
         response_len_ptr: 0,
@@ -161,18 +161,20 @@ async fn prepare(Query(v): Query<Value>) -> impl IntoResponse {
         wasm_func: String::from("prepare"),
     };
     match run_wasm(wp).await {
-        Ok(_) => match error_log_len[0] > 0 {
+        Ok(_) => match error_log_len[0] > 0 && error_log_ptr[0] > 0 {
             true => unsafe {
-                error_log.set_len(error_log_len[0] as usize);
+                let e_len = error_log_len[0] as usize;
+                let error_log = Vec::from_raw_parts(error_log_ptr[0] as *mut u8, e_len, e_len);
                 (
                     StatusCode::BAD_REQUEST,
                     String::from_utf8_lossy(&error_log).into_owned(),
                 )
             },
             false => {
-                let out = match output_len[0] > 0 {
+                let out = match output_len[0] > 0 && output_ptr[0] > 0 {
                     true => unsafe {
-                        output.set_len(output_len[0] as usize);
+                        let o_len = output_len[0] as usize;
+                        let output = Vec::from_raw_parts(output_ptr[0] as *mut u8, o_len, o_len);
                         String::from_utf8_lossy(&output).into_owned()
                     },
                     false => String::new(),
@@ -193,19 +195,17 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
     tokio::spawn(async {
         let bytes = Arc::new(bytes);
         let wasm_dir = std::env::var("WASM_DIR").unwrap();
-        let mut flows = Vec::<u8>::with_capacity(1000);
-        let mut flows_len = vec![0 as u8];
-        let mut error_log = Vec::<u8>::with_capacity(1000);
-        let mut error_log_len = vec![0 as u8];
+        let mut flows_ptr = vec![0 as usize];
+        let mut flows_len = vec![0 as usize];
         let wp = WasmParams {
             flows_user: String::new(),
             flow_id: String::new(),
             event_query: String::new(),
             event_body: bytes.clone(),
-            flows_ptr: flows.as_mut_ptr() as usize,
+            flows_ptr: flows_ptr.as_mut_ptr() as usize,
             flows_len_ptr: flows_len.as_mut_ptr() as usize,
-            error_log_ptr: error_log.as_mut_ptr() as usize,
-            error_log_len_ptr: error_log_len.as_mut_ptr() as usize,
+            error_log_ptr: 0,
+            error_log_len_ptr: 0,
             output_ptr: 0,
             output_len_ptr: 0,
             response_ptr: 0,
@@ -226,52 +226,53 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
             return;
         }
 
-        if flows_len[0] > 0 {
+        if flows_len[0] > 0 && flows_ptr[0] > 0 {
             unsafe {
-                flows.set_len(flows_len[0] as usize);
-            }
+                let f_len = flows_len[0] as usize;
+                let flows = Vec::from_raw_parts(flows_ptr[0] as *mut u8, f_len, f_len);
 
-            if let Ok(flows) = serde_json::from_slice::<Vec<Flow>>(&flows) {
-                for flow in flows.into_iter() {
-                    let wasm_file = match get_wasm_file(&flow.flow_id, false) {
-                        Ok(f) => f,
-                        Err(_) => continue,
-                    };
-                    let flow_id = flow.flow_id.clone();
-                    let mut error_log = Vec::<u8>::with_capacity(1000);
-                    let mut error_log_len = vec![0 as u8];
-                    let wp = WasmParams {
-                        flows_user: flow.flows_user,
-                        wasm_file,
-                        flow_id,
-                        event_query: String::new(),
-                        event_body: bytes.clone(),
-                        flows_ptr: 0,
-                        flows_len_ptr: 0,
-                        error_log_ptr: error_log.as_mut_ptr() as usize,
-                        error_log_len_ptr: error_log_len.as_mut_ptr() as usize,
-                        output_ptr: 0,
-                        output_len_ptr: 0,
-                        response_ptr: 0,
-                        response_len_ptr: 0,
-                        wasm_func: String::from("work"),
-                    };
-                    info!(
-                        r#""msg": {:?}, "flow": {:?}, "function": {:?}"#,
-                        "Running function", flow.flow_id, "work"
-                    );
-                    _ = run_wasm(wp).await;
-                    if error_log_len[0] > 0 {
-                        unsafe {
-                            error_log.set_len(error_log_len[0] as usize);
-                        }
+                if let Ok(flows) = serde_json::from_slice::<Vec<Flow>>(&flows) {
+                    for flow in flows.into_iter() {
+                        let wasm_file = match get_wasm_file(&flow.flow_id, false) {
+                            Ok(f) => f,
+                            Err(_) => continue,
+                        };
+                        let flow_id = flow.flow_id.clone();
+                        let mut error_log_ptr = vec![0 as usize];
+                        let mut error_log_len = vec![0 as usize];
+                        let wp = WasmParams {
+                            flows_user: flow.flows_user,
+                            wasm_file,
+                            flow_id,
+                            event_query: String::new(),
+                            event_body: bytes.clone(),
+                            flows_ptr: 0,
+                            flows_len_ptr: 0,
+                            error_log_ptr: error_log_ptr.as_mut_ptr() as usize,
+                            error_log_len_ptr: error_log_len.as_mut_ptr() as usize,
+                            output_ptr: 0,
+                            output_len_ptr: 0,
+                            response_ptr: 0,
+                            response_len_ptr: 0,
+                            wasm_func: String::from("work"),
+                        };
                         info!(
-                            r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
-                            "function returned with error",
-                            flow.flow_id,
-                            "work",
-                            String::from_utf8_lossy(&error_log).into_owned()
+                            r#""msg": {:?}, "flow": {:?}, "function": {:?}"#,
+                            "Running function", flow.flow_id, "work"
                         );
+                        _ = run_wasm(wp).await;
+                        if error_log_len[0] > 0 && error_log_ptr[0] > 0 {
+                            let e_len = error_log_len[0] as usize;
+                            let error_log =
+                                Vec::from_raw_parts(error_log_ptr[0] as *mut u8, e_len, e_len);
+                            info!(
+                                r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
+                                "function returned with error",
+                                flow.flow_id,
+                                "work",
+                                String::from_utf8_lossy(&error_log).into_owned()
+                            );
+                        }
                     }
                 }
             }
@@ -287,20 +288,18 @@ async fn lambda(
 ) -> impl IntoResponse {
     let bytes = Arc::new(bytes);
     let wasm_dir = std::env::var("WASM_DIR").unwrap();
-    let mut flows = Vec::<u8>::with_capacity(1000);
-    let mut flows_len = vec![0 as u8];
-    let mut error_log = Vec::<u8>::with_capacity(1000);
-    let mut error_log_len = vec![0 as u8];
+    let mut flows_ptr = vec![0 as usize];
+    let mut flows_len = vec![0 as usize];
     qry.insert(String::from("l_key"), Value::String(l_key));
     let wp = WasmParams {
         flows_user: String::new(),
         flow_id: String::new(),
         event_query: serde_json::to_string(&qry).unwrap(),
         event_body: bytes.clone(),
-        flows_ptr: flows.as_mut_ptr() as usize,
+        flows_ptr: flows_ptr.as_mut_ptr() as usize,
         flows_len_ptr: flows_len.as_mut_ptr() as usize,
-        error_log_ptr: error_log.as_mut_ptr() as usize,
-        error_log_len_ptr: error_log_len.as_mut_ptr() as usize,
+        error_log_ptr: 0,
+        error_log_len_ptr: 0,
         output_ptr: 0,
         output_len_ptr: 0,
         response_ptr: 0,
@@ -321,65 +320,65 @@ async fn lambda(
         return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
     }
 
-    if flows_len[0] > 0 {
+    if flows_len[0] > 0 && flows_ptr[0] > 0 {
         unsafe {
-            flows.set_len(flows_len[0] as usize);
-        }
+            let f_len = flows_len[0] as usize;
+            let flows = Vec::from_raw_parts(flows_ptr[0] as *mut u8, f_len, f_len);
 
-        if let Ok(flow) = serde_json::from_slice::<Flow>(&flows) {
-            let wasm_file = match get_wasm_file(&flow.flow_id, false) {
-                Ok(f) => f,
-                Err(e) => {
-                    return Err((StatusCode::NOT_FOUND, e.to_string()));
-                }
-            };
-            let flow_id = flow.flow_id.clone();
-            let mut error_log = Vec::<u8>::with_capacity(1000);
-            let mut error_log_len = vec![0 as u8];
-            let mut response = Vec::<u8>::with_capacity(1000);
-            let mut response_len = vec![0 as u8];
-            let wp = WasmParams {
-                flows_user: flow.flows_user,
-                wasm_file,
-                flow_id,
-                event_query: serde_json::to_string(&qry).unwrap(),
-                event_body: bytes.clone(),
-                flows_ptr: 0,
-                flows_len_ptr: 0,
-                error_log_ptr: error_log.as_mut_ptr() as usize,
-                error_log_len_ptr: error_log_len.as_mut_ptr() as usize,
-                output_ptr: 0,
-                output_len_ptr: 0,
-                response_ptr: response.as_mut_ptr() as usize,
-                response_len_ptr: response_len.as_mut_ptr() as usize,
-                wasm_func: String::from("work"),
-            };
-            info!(
-                r#""msg": {:?}, "flow": {:?}, "function": {:?}"#,
-                "Running function", flow.flow_id, "work"
-            );
-            _ = run_wasm(wp).await;
-            if error_log_len[0] > 0 {
-                unsafe {
-                    error_log.set_len(error_log_len[0] as usize);
-                }
+            if let Ok(flow) = serde_json::from_slice::<Flow>(&flows) {
+                let wasm_file = match get_wasm_file(&flow.flow_id, false) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        return Err((StatusCode::NOT_FOUND, e.to_string()));
+                    }
+                };
+                let flow_id = flow.flow_id.clone();
+                let mut error_log_ptr = vec![0 as usize];
+                let mut error_log_len = vec![0 as usize];
+                let mut response_ptr = vec![0 as usize];
+                let mut response_len = vec![0 as usize];
+                let wp = WasmParams {
+                    flows_user: flow.flows_user,
+                    wasm_file,
+                    flow_id,
+                    event_query: serde_json::to_string(&qry).unwrap(),
+                    event_body: bytes.clone(),
+                    flows_ptr: 0,
+                    flows_len_ptr: 0,
+                    error_log_ptr: error_log_ptr.as_mut_ptr() as usize,
+                    error_log_len_ptr: error_log_len.as_mut_ptr() as usize,
+                    output_ptr: 0,
+                    output_len_ptr: 0,
+                    response_ptr: response_ptr.as_mut_ptr() as usize,
+                    response_len_ptr: response_len.as_mut_ptr() as usize,
+                    wasm_func: String::from("work"),
+                };
                 info!(
-                    r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
-                    "function returned with error",
-                    flow.flow_id,
-                    "work",
-                    String::from_utf8_lossy(&error_log).into_owned()
+                    r#""msg": {:?}, "flow": {:?}, "function": {:?}"#,
+                    "Running function", flow.flow_id, "work"
                 );
-            }
-
-            if response_len[0] > 0 {
-                unsafe {
-                    response.set_len(response_len[0] as usize);
+                _ = run_wasm(wp).await;
+                if error_log_len[0] > 0 && error_log_ptr[0] > 0 {
+                    let e_len = error_log_len[0] as usize;
+                    let error_log = Vec::from_raw_parts(error_log_ptr[0] as *mut u8, e_len, e_len);
+                    info!(
+                        r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
+                        "function returned with error",
+                        flow.flow_id,
+                        "work",
+                        String::from_utf8_lossy(&error_log).into_owned()
+                    );
                 }
-                return Ok((
-                    StatusCode::OK,
-                    String::from_utf8_lossy(&response).into_owned(),
-                ));
+
+                if response_ptr[0] > 0 && response_len[0] > 0 {
+                    let r_len = response_len[0] as usize;
+                    let response = Vec::from_raw_parts(response_ptr[0] as *mut u8, r_len, r_len);
+
+                    return Ok((
+                        StatusCode::OK,
+                        String::from_utf8_lossy(&response).into_owned(),
+                    ));
+                }
             }
         }
     }
