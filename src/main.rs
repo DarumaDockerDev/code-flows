@@ -4,12 +4,11 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
     routing::post,
-    Router,
+    Json, Router,
 };
 use log::info;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -17,6 +16,7 @@ use std::path::{PathBuf, MAIN_SEPARATOR};
 use std::process::{Command, ExitStatus};
 use std::sync::Arc;
 use std::time::SystemTime;
+use std::{collections::HashMap, fs};
 use wasmedge_sdk::{
     config::{CommonConfigOptions, ConfigBuilder, HostRegistrationConfigOptions},
     params, ImportObjectBuilder, Module, PluginManager, Vm,
@@ -32,16 +32,19 @@ fn download_wasm_file(wasm_path: &str, local_wasm_path: &str) -> std::io::Result
         .status()
 }
 
-fn get_wasm_file(flow_id: &str, newly_built: bool) -> Result<String, std::io::Error> {
-    let wasm_dir = std::env::var("WASM_DIR").unwrap();
-    let wasm_path = flow_id
+fn get_wasm_path(flow_id: &str) -> String {
+    flow_id
         .get(0..3)
         .unwrap()
         .chars()
         .fold(String::new(), |accum, s| {
             format!("{}{}{}", accum, &s, MAIN_SEPARATOR)
-        });
-    let wasm_path = format!("{}{}.wasm", wasm_path, flow_id);
+        })
+}
+
+fn get_wasm_file(flow_id: &str, newly_built: bool) -> Result<String, std::io::Error> {
+    let wasm_dir = std::env::var("WASM_DIR").unwrap();
+    let wasm_path = format!("{}{}.wasm", get_wasm_path(flow_id), flow_id);
     let local_wasm_path = format!("{}{}{}", wasm_dir, MAIN_SEPARATOR, wasm_path);
 
     match newly_built {
@@ -56,6 +59,14 @@ fn get_wasm_file(flow_id: &str, newly_built: bool) -> Result<String, std::io::Er
     }
 
     Ok(local_wasm_path)
+}
+
+fn get_env_file(flow_id: &str) -> String {
+    let wasm_dir = std::env::var("WASM_DIR").unwrap();
+    let wasm_path = format!("{}{}.env.json", get_wasm_path(flow_id), flow_id);
+    let local_env_path = format!("{}{}{}", wasm_dir, MAIN_SEPARATOR, wasm_path);
+
+    local_env_path
 }
 
 async fn run_wasm(wp: WasmParams) -> Result<(), Box<dyn std::error::Error>> {
@@ -104,7 +115,15 @@ async fn run_wasm(wp: WasmParams) -> Result<(), Box<dyn std::error::Error>> {
         .register_import_module(import)?
         .register_module(None, module)?;
     let mut wasi_module = vm.wasi_module()?;
-    wasi_module.initialize(None, None, None);
+    match fs::read(wp.wasm_env) {
+        Ok(env) => {
+            let env = Some(serde_json::from_slice(&env).unwrap());
+            wasi_module.initialize(None, env, None);
+        }
+        Err(_) => {
+            wasi_module.initialize(None, None, None);
+        }
+    };
 
     vm.run_func_async(None::<&str>, wp.wasm_func, params!())
         .await?;
@@ -127,6 +146,7 @@ struct WasmParams {
     response_len_ptr: usize,
     wasm_file: String,
     wasm_func: String,
+    wasm_env: String,
 }
 
 #[derive(Deserialize)]
@@ -135,11 +155,31 @@ struct Flow {
     flows_user: String,
 }
 
-async fn prepare(Query(v): Query<Value>) -> impl IntoResponse {
-    let wasm_file = match get_wasm_file(v["flow_id"].as_str().unwrap(), true) {
-        Ok(f) => f,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    };
+#[derive(Serialize, Deserialize)]
+struct Env {
+    name: String,
+    value: String,
+}
+
+async fn env(Query(v): Query<Value>, Json(env_json): Json<Vec<Env>>) -> impl IntoResponse {
+    let flow_id = v["flow_id"].as_str().unwrap();
+    let env_file = get_env_file(flow_id);
+    let env_json: Vec<String> = env_json
+        .iter()
+        .map(|e| format!("{}={}", e.name, e.value))
+        .collect();
+    match fs::write(env_file, serde_json::to_string_pretty(&env_json).unwrap()) {
+        Ok(_) => (StatusCode::OK, String::new()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+async fn register(Query(v): Query<Value>) -> impl IntoResponse {
+    let wasm_file =
+        match get_wasm_file(v["flow_id"].as_str().unwrap(), v["newly_built"].is_string()) {
+            Ok(f) => f,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        };
     let mut error_log_ptr = vec![0 as usize];
     let mut error_log_len = vec![0 as usize];
     let mut output_ptr = vec![0 as usize];
@@ -158,7 +198,8 @@ async fn prepare(Query(v): Query<Value>) -> impl IntoResponse {
         response_ptr: 0,
         response_len_ptr: 0,
         wasm_file,
-        wasm_func: String::from("prepare"),
+        wasm_func: String::from("register"),
+        wasm_env: get_env_file(v["flow_id"].as_str().unwrap()),
     };
     match run_wasm(wp).await {
         Ok(_) => match error_log_len[0] > 0 && error_log_ptr[0] > 0 {
@@ -221,6 +262,7 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
             .to_string_lossy()
             .into_owned(),
             wasm_func: String::from(handler),
+            wasm_env: String::from("[]"),
         };
         if let Err(_) = run_wasm(wp).await {
             return;
@@ -243,6 +285,7 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
                         let wp = WasmParams {
                             flows_user: flow.flows_user,
                             wasm_file,
+                            wasm_env: get_env_file(&flow_id),
                             flow_id,
                             event_query: String::new(),
                             event_body: bytes.clone(),
@@ -315,6 +358,7 @@ async fn lambda(
         .to_string_lossy()
         .into_owned(),
         wasm_func: String::from("request"),
+        wasm_env: String::from("[]"),
     };
     if let Err(e) = run_wasm(wp).await {
         return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
@@ -340,6 +384,7 @@ async fn lambda(
                 let wp = WasmParams {
                     flows_user: flow.flows_user,
                     wasm_file,
+                    wasm_env: get_env_file(&flow_id),
                     flow_id,
                     event_query: serde_json::to_string(&qry).unwrap(),
                     event_body: bytes.clone(),
@@ -409,7 +454,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )))
         .init();
     let app = Router::new()
-        .route("/prepare", post(prepare))
+        .route("/inner/register", post(register))
+        .route("/inner/env", post(env))
         .route("/hook/:app/:handler", post(hook))
         .route("/lambda/:l_key", post(lambda).get(lambda));
 
