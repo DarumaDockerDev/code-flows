@@ -131,11 +131,7 @@ async fn run_wasm(wp: WasmParams) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-struct WasmParams {
-    flows_user: String,
-    flow_id: String,
-    event_query: String,
-    event_body: Arc<Bytes>,
+struct PtrParams {
     flows_ptr: usize,
     flows_len_ptr: usize,
     error_log_ptr: usize,
@@ -144,9 +140,59 @@ struct WasmParams {
     output_len_ptr: usize,
     response_ptr: usize,
     response_len_ptr: usize,
+}
+
+impl Drop for PtrParams {
+    fn drop(&mut self) {
+        unsafe {
+            if self.flows_len_ptr > 0 && *(self.flows_len_ptr as *mut usize) > 0 {
+                if self.flows_ptr > 0 && *(self.flows_ptr as *mut usize) > 0 {
+                    let len = *(self.flows_len_ptr as *mut usize);
+                    Vec::from_raw_parts(*(self.flows_ptr as *mut usize) as *mut u8, len, len);
+                }
+            }
+
+            if self.error_log_len_ptr > 0 && *(self.error_log_len_ptr as *mut usize) > 0 {
+                if self.error_log_ptr > 0 && *(self.error_log_ptr as *mut usize) > 0 {
+                    let len = *(self.error_log_len_ptr as *mut usize);
+                    Vec::from_raw_parts(*(self.error_log_ptr as *mut usize) as *mut u8, len, len);
+                }
+            }
+
+            if self.output_len_ptr > 0 && *(self.output_len_ptr as *mut usize) > 0 {
+                if self.output_ptr > 0 && *(self.output_ptr as *mut usize) > 0 {
+                    let len = *(self.output_len_ptr as *mut usize);
+                    Vec::from_raw_parts(*(self.output_ptr as *mut usize) as *mut u8, len, len);
+                }
+            }
+
+            if self.response_len_ptr > 0 && *(self.response_len_ptr as *mut usize) > 0 {
+                if self.response_ptr > 0 && *(self.response_ptr as *mut usize) > 0 {
+                    let len = *(self.response_len_ptr as *mut usize);
+                    Vec::from_raw_parts(*(self.response_ptr as *mut usize) as *mut u8, len, len);
+                }
+            }
+        }
+    }
+}
+
+struct WasmParams {
+    flows_user: String,
+    flow_id: String,
+    event_query: String,
+    event_body: Arc<Bytes>,
     wasm_file: String,
     wasm_func: String,
     wasm_env: String,
+
+    flows_ptr: usize,
+    flows_len_ptr: usize,
+    error_log_ptr: usize,
+    error_log_len_ptr: usize,
+    output_ptr: usize,
+    output_len_ptr: usize,
+    response_ptr: usize,
+    response_len_ptr: usize,
 }
 
 #[derive(Deserialize)]
@@ -184,11 +230,7 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
     let mut error_log_len = vec![0 as usize];
     let mut output_ptr = vec![0 as usize];
     let mut output_len = vec![0 as usize];
-    let wp = WasmParams {
-        flows_user: v["flows_user"].as_str().unwrap().to_string(),
-        flow_id: v["flow_id"].as_str().unwrap().to_string(),
-        event_query: String::new(),
-        event_body: Arc::new(Bytes::new()),
+    let pp = PtrParams {
         flows_ptr: 0,
         flows_len_ptr: 0,
         error_log_ptr: error_log_ptr.as_mut_ptr() as usize,
@@ -197,15 +239,33 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
         output_len_ptr: output_len.as_mut_ptr() as usize,
         response_ptr: 0,
         response_len_ptr: 0,
+    };
+    let wp = WasmParams {
+        flows_user: v["flows_user"].as_str().unwrap().to_string(),
+        flow_id: v["flow_id"].as_str().unwrap().to_string(),
+        event_query: String::new(),
+        event_body: Arc::new(Bytes::new()),
         wasm_file,
         wasm_func: String::from("register"),
         wasm_env: get_env_file(v["flow_id"].as_str().unwrap()),
+
+        flows_ptr: pp.flows_ptr,
+        flows_len_ptr: pp.flows_len_ptr,
+        error_log_ptr: pp.error_log_ptr,
+        error_log_len_ptr: pp.error_log_len_ptr,
+        output_ptr: pp.output_ptr,
+        output_len_ptr: pp.output_len_ptr,
+        response_ptr: pp.response_ptr,
+        response_len_ptr: pp.response_len_ptr,
     };
     match run_wasm(wp).await {
         Ok(_) => match error_log_len[0] > 0 && error_log_ptr[0] > 0 {
             true => unsafe {
                 let e_len = error_log_len[0] as usize;
                 let error_log = Vec::from_raw_parts(error_log_ptr[0] as *mut u8, e_len, e_len);
+                // Prevent reconstruct vec from ptr when wp is dropped
+                error_log_ptr[0] = 0;
+                error_log_len[0] = 0;
                 (
                     StatusCode::BAD_REQUEST,
                     String::from_utf8_lossy(&error_log).into_owned(),
@@ -216,6 +276,9 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
                     true => unsafe {
                         let o_len = output_len[0] as usize;
                         let output = Vec::from_raw_parts(output_ptr[0] as *mut u8, o_len, o_len);
+                        // Prevent reconstruct vec from ptr when wp is droped
+                        output_ptr[0] = 0;
+                        output_len[0] = 0;
                         String::from_utf8_lossy(&output).into_owned()
                     },
                     false => String::new(),
@@ -232,17 +295,17 @@ async fn _challenge(bytes: Bytes) -> impl IntoResponse {
     (StatusCode::OK, v["challenge"].as_str().unwrap().to_string())
 }
 
-async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> impl IntoResponse {
-    tokio::spawn(async {
+async fn hook(
+    Path((app, handler)): Path<(String, String)>,
+    Query(qry): Query<HashMap<String, Value>>,
+    bytes: Bytes,
+) -> impl IntoResponse {
+    tokio::spawn(async move {
         let bytes = Arc::new(bytes);
         let wasm_dir = std::env::var("WASM_DIR").unwrap();
         let mut flows_ptr = vec![0 as usize];
         let mut flows_len = vec![0 as usize];
-        let wp = WasmParams {
-            flows_user: String::new(),
-            flow_id: String::new(),
-            event_query: String::new(),
-            event_body: bytes.clone(),
+        let pp = PtrParams {
             flows_ptr: flows_ptr.as_mut_ptr() as usize,
             flows_len_ptr: flows_len.as_mut_ptr() as usize,
             error_log_ptr: 0,
@@ -251,6 +314,12 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
             output_len_ptr: 0,
             response_ptr: 0,
             response_len_ptr: 0,
+        };
+        let wp = WasmParams {
+            flows_user: String::new(),
+            flow_id: String::new(),
+            event_query: serde_json::to_string(&qry).unwrap(),
+            event_body: bytes.clone(),
             wasm_file: [
                 wasm_dir,
                 String::from("apps"),
@@ -263,6 +332,14 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
             .into_owned(),
             wasm_func: String::from(handler),
             wasm_env: String::from("[]"),
+            flows_ptr: pp.flows_ptr,
+            flows_len_ptr: pp.flows_len_ptr,
+            error_log_ptr: pp.error_log_ptr,
+            error_log_len_ptr: pp.error_log_len_ptr,
+            output_ptr: pp.output_ptr,
+            output_len_ptr: pp.output_len_ptr,
+            response_ptr: pp.response_ptr,
+            response_len_ptr: pp.response_len_ptr,
         };
         if let Err(_) = run_wasm(wp).await {
             return;
@@ -272,6 +349,9 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
             unsafe {
                 let f_len = flows_len[0] as usize;
                 let flows = Vec::from_raw_parts(flows_ptr[0] as *mut u8, f_len, f_len);
+                // Prevent reconstruct vec from ptr when wp is droped
+                flows_ptr[0] = 0;
+                flows_len[0] = 0;
 
                 if let Ok(flows) = serde_json::from_slice::<Vec<Flow>>(&flows) {
                     for flow in flows.into_iter() {
@@ -282,13 +362,7 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
                         let flow_id = flow.flow_id.clone();
                         let mut error_log_ptr = vec![0 as usize];
                         let mut error_log_len = vec![0 as usize];
-                        let wp = WasmParams {
-                            flows_user: flow.flows_user,
-                            wasm_file,
-                            wasm_env: get_env_file(&flow_id),
-                            flow_id,
-                            event_query: String::new(),
-                            event_body: bytes.clone(),
+                        let pp = PtrParams {
                             flows_ptr: 0,
                             flows_len_ptr: 0,
                             error_log_ptr: error_log_ptr.as_mut_ptr() as usize,
@@ -297,7 +371,23 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
                             output_len_ptr: 0,
                             response_ptr: 0,
                             response_len_ptr: 0,
+                        };
+                        let wp = WasmParams {
+                            flows_user: flow.flows_user,
+                            wasm_file,
+                            wasm_env: get_env_file(&flow_id),
+                            flow_id,
+                            event_query: serde_json::to_string(&qry).unwrap(),
+                            event_body: bytes.clone(),
                             wasm_func: String::from("work"),
+                            flows_ptr: pp.flows_ptr,
+                            flows_len_ptr: pp.flows_len_ptr,
+                            error_log_ptr: pp.error_log_ptr,
+                            error_log_len_ptr: pp.error_log_len_ptr,
+                            output_ptr: pp.output_ptr,
+                            output_len_ptr: pp.output_len_ptr,
+                            response_ptr: pp.response_ptr,
+                            response_len_ptr: pp.response_len_ptr,
                         };
                         info!(
                             r#""msg": {:?}, "flow": {:?}, "function": {:?}"#,
@@ -308,6 +398,9 @@ async fn hook(Path((app, handler)): Path<(String, String)>, bytes: Bytes) -> imp
                             let e_len = error_log_len[0] as usize;
                             let error_log =
                                 Vec::from_raw_parts(error_log_ptr[0] as *mut u8, e_len, e_len);
+                            // Prevent reconstruct vec from ptr when wp is droped
+                            error_log_ptr[0] = 0;
+                            error_log_len[0] = 0;
                             info!(
                                 r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
                                 "function returned with error",
@@ -334,11 +427,7 @@ async fn lambda(
     let mut flows_ptr = vec![0 as usize];
     let mut flows_len = vec![0 as usize];
     qry.insert(String::from("l_key"), Value::String(l_key));
-    let wp = WasmParams {
-        flows_user: String::new(),
-        flow_id: String::new(),
-        event_query: serde_json::to_string(&qry).unwrap(),
-        event_body: bytes.clone(),
+    let pp = PtrParams {
         flows_ptr: flows_ptr.as_mut_ptr() as usize,
         flows_len_ptr: flows_len.as_mut_ptr() as usize,
         error_log_ptr: 0,
@@ -347,6 +436,12 @@ async fn lambda(
         output_len_ptr: 0,
         response_ptr: 0,
         response_len_ptr: 0,
+    };
+    let wp = WasmParams {
+        flows_user: String::new(),
+        flow_id: String::new(),
+        event_query: serde_json::to_string(&qry).unwrap(),
+        event_body: bytes.clone(),
         wasm_file: [
             wasm_dir,
             String::from("apps"),
@@ -359,6 +454,14 @@ async fn lambda(
         .into_owned(),
         wasm_func: String::from("request"),
         wasm_env: String::from("[]"),
+        flows_ptr: pp.flows_ptr,
+        flows_len_ptr: pp.flows_len_ptr,
+        error_log_ptr: pp.error_log_ptr,
+        error_log_len_ptr: pp.error_log_len_ptr,
+        output_ptr: pp.output_ptr,
+        output_len_ptr: pp.output_len_ptr,
+        response_ptr: pp.response_ptr,
+        response_len_ptr: pp.response_len_ptr,
     };
     if let Err(e) = run_wasm(wp).await {
         return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
@@ -368,6 +471,9 @@ async fn lambda(
         unsafe {
             let f_len = flows_len[0] as usize;
             let flows = Vec::from_raw_parts(flows_ptr[0] as *mut u8, f_len, f_len);
+            // Prevent reconstruct vec from ptr when wp is droped
+            flows_ptr[0] = 0;
+            flows_len[0] = 0;
 
             if let Ok(flow) = serde_json::from_slice::<Flow>(&flows) {
                 let wasm_file = match get_wasm_file(&flow.flow_id, false) {
@@ -381,13 +487,7 @@ async fn lambda(
                 let mut error_log_len = vec![0 as usize];
                 let mut response_ptr = vec![0 as usize];
                 let mut response_len = vec![0 as usize];
-                let wp = WasmParams {
-                    flows_user: flow.flows_user,
-                    wasm_file,
-                    wasm_env: get_env_file(&flow_id),
-                    flow_id,
-                    event_query: serde_json::to_string(&qry).unwrap(),
-                    event_body: bytes.clone(),
+                let pp = PtrParams {
                     flows_ptr: 0,
                     flows_len_ptr: 0,
                     error_log_ptr: error_log_ptr.as_mut_ptr() as usize,
@@ -396,7 +496,23 @@ async fn lambda(
                     output_len_ptr: 0,
                     response_ptr: response_ptr.as_mut_ptr() as usize,
                     response_len_ptr: response_len.as_mut_ptr() as usize,
+                };
+                let wp = WasmParams {
+                    flows_user: flow.flows_user,
+                    wasm_file,
+                    wasm_env: get_env_file(&flow_id),
+                    flow_id,
+                    event_query: serde_json::to_string(&qry).unwrap(),
+                    event_body: bytes.clone(),
                     wasm_func: String::from("work"),
+                    flows_ptr: pp.flows_ptr,
+                    flows_len_ptr: pp.flows_len_ptr,
+                    error_log_ptr: pp.error_log_ptr,
+                    error_log_len_ptr: pp.error_log_len_ptr,
+                    output_ptr: pp.output_ptr,
+                    output_len_ptr: pp.output_len_ptr,
+                    response_ptr: pp.response_ptr,
+                    response_len_ptr: pp.response_len_ptr,
                 };
                 info!(
                     r#""msg": {:?}, "flow": {:?}, "function": {:?}"#,
@@ -406,6 +522,9 @@ async fn lambda(
                 if error_log_len[0] > 0 && error_log_ptr[0] > 0 {
                     let e_len = error_log_len[0] as usize;
                     let error_log = Vec::from_raw_parts(error_log_ptr[0] as *mut u8, e_len, e_len);
+                    // Prevent reconstruct vec from ptr when wp is droped
+                    error_log_ptr[0] = 0;
+                    error_log_len[0] = 0;
                     info!(
                         r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
                         "function returned with error",
@@ -418,6 +537,9 @@ async fn lambda(
                 if response_ptr[0] > 0 && response_len[0] > 0 {
                     let r_len = response_len[0] as usize;
                     let response = Vec::from_raw_parts(response_ptr[0] as *mut u8, r_len, r_len);
+                    // Prevent reconstruct vec from ptr when wp is droped
+                    response_ptr[0] = 0;
+                    response_len[0] = 0;
 
                     return Ok((
                         StatusCode::OK,
