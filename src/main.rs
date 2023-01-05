@@ -19,7 +19,7 @@ use std::time::SystemTime;
 use std::{collections::HashMap, fs};
 use wasmedge_sdk::{
     config::{CommonConfigOptions, ConfigBuilder, HostRegistrationConfigOptions},
-    params, ImportObjectBuilder, Module, PluginManager, Vm,
+    params, ImportObjectBuilder, Module, PluginManager, Vm, HOST_FUNCS,
 };
 
 mod host_func;
@@ -73,40 +73,64 @@ async fn run_wasm(wp: WasmParams) -> Result<(), Box<dyn std::error::Error>> {
     PluginManager::load_from_default_paths();
     let module = Module::from_file(None, &wp.wasm_file)?;
 
+    let mut func_keys = vec![];
+
     // create an import module
-    let import = ImportObjectBuilder::new()
-        .with_func::<i32, i32>("get_flows_user", host_func::get_flows_user(wp.flows_user))?
-        .with_func::<i32, i32>("get_flow_id", host_func::get_flow_id(wp.flow_id))?
-        .with_func::<(), i32>(
-            "get_event_body_length",
-            host_func::get_event_body_length(wp.event_body.len() as i32),
-        )?
-        .with_func::<i32, i32>("get_event_body", host_func::get_event_body(wp.event_body))?
-        .with_func::<(), i32>(
-            "get_event_query_length",
-            host_func::get_event_query_length(wp.event_query.len() as i32),
-        )?
-        .with_func::<i32, i32>(
-            "get_event_query",
-            host_func::get_event_query(wp.event_query),
-        )?
-        .with_func::<(i32, i32), ()>(
-            "set_flows",
-            host_func::set_flows(wp.flows_ptr, wp.flows_len_ptr),
-        )?
-        .with_func::<(i32, i32), ()>(
-            "set_error_log",
-            host_func::set_error_log(wp.error_log_ptr, wp.error_log_len_ptr),
-        )?
-        .with_func::<(i32, i32), ()>(
-            "set_output",
-            host_func::set_output(wp.output_ptr, wp.output_len_ptr),
-        )?
-        .with_func::<(i32, i32), ()>(
-            "set_response",
-            host_func::set_response(wp.response_ptr, wp.response_len_ptr),
-        )?
-        .build("env")?;
+    let (builder, func_key) = ImportObjectBuilder::new()
+        .with_func::<i32, i32>("get_flows_user", host_func::get_flows_user(wp.flows_user))?;
+    func_keys.push(func_key);
+
+    let (builder, func_key) =
+        builder.with_func::<i32, i32>("get_flow_id", host_func::get_flow_id(wp.flow_id))?;
+    func_keys.push(func_key);
+
+    let (builder, func_key) = builder.with_func::<(), i32>(
+        "get_event_body_length",
+        host_func::get_event_body_length(wp.event_body.len() as i32),
+    )?;
+    func_keys.push(func_key);
+
+    let (builder, func_key) = builder
+        .with_func::<i32, i32>("get_event_body", host_func::get_event_body(wp.event_body))?;
+    func_keys.push(func_key);
+
+    let (builder, func_key) = builder.with_func::<(), i32>(
+        "get_event_query_length",
+        host_func::get_event_query_length(wp.event_query.len() as i32),
+    )?;
+    func_keys.push(func_key);
+
+    let (builder, func_key) = builder.with_func::<i32, i32>(
+        "get_event_query",
+        host_func::get_event_query(wp.event_query),
+    )?;
+    func_keys.push(func_key);
+
+    let (builder, func_key) = builder.with_func::<(i32, i32), ()>(
+        "set_flows",
+        host_func::set_flows(wp.flows_ptr, wp.flows_len_ptr),
+    )?;
+    func_keys.push(func_key);
+
+    let (builder, func_key) = builder.with_func::<(i32, i32), ()>(
+        "set_error_log",
+        host_func::set_error_log(wp.error_log_ptr, wp.error_log_len_ptr),
+    )?;
+    func_keys.push(func_key);
+
+    let (builder, func_key) = builder.with_func::<(i32, i32), ()>(
+        "set_output",
+        host_func::set_output(wp.output_ptr, wp.output_len_ptr),
+    )?;
+    func_keys.push(func_key);
+
+    let (builder, func_key) = builder.with_func::<(i32, i32), ()>(
+        "set_response",
+        host_func::set_response(wp.response_ptr, wp.response_len_ptr),
+    )?;
+    func_keys.push(func_key);
+
+    let import = builder.build("env")?;
 
     let config = ConfigBuilder::new(CommonConfigOptions::default())
         .with_host_registration_config(HostRegistrationConfigOptions::default().wasi(true))
@@ -127,6 +151,13 @@ async fn run_wasm(wp: WasmParams) -> Result<(), Box<dyn std::error::Error>> {
 
     vm.run_func_async(None::<&str>, wp.wasm_func, params!())
         .await?;
+
+    drop(vm);
+
+    let mut hf = HOST_FUNCS.write();
+    for fk in func_keys.iter() {
+        hf.remove(fk);
+    }
 
     Ok(())
 }
