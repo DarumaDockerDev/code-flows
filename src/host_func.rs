@@ -140,11 +140,11 @@ pub fn set_flows(
         let flows = caller
             .memory(0)
             .unwrap()
-            .read_string(ptr as u32, len as u32)
+            .read(ptr as u32, len as u32)
             .unwrap();
 
         unsafe {
-            let bytes = flows.as_bytes();
+            let bytes = flows;
             std::ptr::write(flows_len_ptr as *mut usize, bytes.len());
 
             let v: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -188,11 +188,11 @@ pub fn set_output(
         let output = caller
             .memory(0)
             .unwrap()
-            .read_string(ptr as u32, len as u32)
+            .read(ptr as u32, len as u32)
             .unwrap();
 
         unsafe {
-            let bytes = output.as_bytes();
+            let bytes = output;
             std::ptr::write(output_len_ptr as *mut usize, bytes.len());
 
             let v: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -236,11 +236,11 @@ pub fn set_error_log(
         let error_log = caller
             .memory(0)
             .unwrap()
-            .read_string(ptr as u32, len as u32)
+            .read(ptr as u32, len as u32)
             .unwrap();
 
         unsafe {
-            let bytes = error_log.as_bytes();
+            let bytes = error_log;
             std::ptr::write(error_log_len_ptr as *mut usize, bytes.len());
 
             let v: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -284,11 +284,11 @@ pub fn set_response(
         let response = caller
             .memory(0)
             .unwrap()
-            .read_string(ptr as u32, len as u32)
+            .read(ptr as u32, len as u32)
             .unwrap();
 
         unsafe {
-            let bytes = response.as_bytes();
+            let bytes = response;
             std::ptr::write(response_len_ptr as *mut usize, bytes.len());
 
             let v: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -300,6 +300,77 @@ pub fn set_response(
             }
 
             std::ptr::write(response_ptr as *mut usize, p);
+        }
+
+        Ok(vec![])
+    }
+}
+
+pub fn set_response_headers(
+    response_headers_ptr: usize,
+    response_headers_len_ptr: usize,
+) -> impl Fn(CallingFrame, Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> + Send + Sync + 'static
+{
+    move |frame: wasmedge_sdk::CallingFrame, args: Vec<wasmedge_sdk::WasmValue>| {
+        let caller = Caller::new(frame);
+        if args.len() != 2 {
+            return Err(HostFuncError::User(1));
+        }
+
+        let ptr = if args[0].ty() == ValType::I32 {
+            args[0].to_i32()
+        } else {
+            return Err(HostFuncError::User(2));
+        };
+
+        let len = if args[1].ty() == ValType::I32 {
+            args[1].to_i32()
+        } else {
+            return Err(HostFuncError::User(2));
+        };
+
+        let response_headers = caller
+            .memory(0)
+            .unwrap()
+            .read(ptr as u32, len as u32)
+            .unwrap();
+
+        unsafe {
+            let bytes = response_headers;
+            std::ptr::write(response_headers_len_ptr as *mut usize, bytes.len());
+
+            let v: Vec<u8> = Vec::with_capacity(bytes.len());
+            let mut v = std::mem::ManuallyDrop::new(v);
+
+            let p = v.as_mut_ptr() as usize;
+            for n in 0..bytes.len() {
+                std::ptr::write((p + n) as *mut u8, bytes[n]);
+            }
+
+            std::ptr::write(response_headers_ptr as *mut usize, p);
+        }
+
+        Ok(vec![])
+    }
+}
+
+pub fn set_response_status(
+    response_status_ptr: usize,
+) -> impl Fn(CallingFrame, Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> + Send + Sync + 'static
+{
+    move |_frame: wasmedge_sdk::CallingFrame, args: Vec<wasmedge_sdk::WasmValue>| {
+        if args.len() != 1 {
+            return Err(HostFuncError::User(1));
+        }
+
+        let len = if args[0].ty() == ValType::I32 {
+            args[0].to_i32()
+        } else {
+            return Err(HostFuncError::User(2));
+        };
+
+        unsafe {
+            std::ptr::write(response_status_ptr as *mut u16, len as u16);
         }
 
         Ok(vec![])

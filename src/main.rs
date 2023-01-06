@@ -2,7 +2,7 @@ use axum::{
     body::Bytes,
     extract::{Path, Query},
     http::StatusCode,
-    response::IntoResponse,
+    response::{AppendHeaders, IntoResponse},
     routing::post,
     Json, Router,
 };
@@ -130,6 +130,18 @@ async fn run_wasm(wp: WasmParams) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     func_keys.push(func_key);
 
+    let (builder, func_key) = builder.with_func::<(i32, i32), ()>(
+        "set_response_headers",
+        host_func::set_response_headers(wp.response_headers_ptr, wp.response_headers_len_ptr),
+    )?;
+    func_keys.push(func_key);
+
+    let (builder, func_key) = builder.with_func::<i32, ()>(
+        "set_response_status",
+        host_func::set_response_status(wp.response_status_ptr),
+    )?;
+    func_keys.push(func_key);
+
     let import = builder.build("env")?;
 
     let config = ConfigBuilder::new(CommonConfigOptions::default())
@@ -171,6 +183,9 @@ struct PtrParams {
     output_len_ptr: usize,
     response_ptr: usize,
     response_len_ptr: usize,
+    response_headers_ptr: usize,
+    response_headers_len_ptr: usize,
+    response_status_ptr: usize,
 }
 
 impl Drop for PtrParams {
@@ -203,6 +218,19 @@ impl Drop for PtrParams {
                     Vec::from_raw_parts(*(self.response_ptr as *mut usize) as *mut u8, len, len);
                 }
             }
+
+            if self.response_headers_len_ptr > 0
+                && *(self.response_headers_len_ptr as *mut usize) > 0
+            {
+                if self.response_headers_ptr > 0 && *(self.response_headers_ptr as *mut usize) > 0 {
+                    let len = *(self.response_headers_len_ptr as *mut usize);
+                    Vec::from_raw_parts(
+                        *(self.response_headers_ptr as *mut usize) as *mut u8,
+                        len,
+                        len,
+                    );
+                }
+            }
         }
     }
 }
@@ -224,6 +252,9 @@ struct WasmParams {
     output_len_ptr: usize,
     response_ptr: usize,
     response_len_ptr: usize,
+    response_headers_ptr: usize,
+    response_headers_len_ptr: usize,
+    response_status_ptr: usize,
 }
 
 #[derive(Deserialize)]
@@ -270,6 +301,9 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
         output_len_ptr: output_len.as_mut_ptr() as usize,
         response_ptr: 0,
         response_len_ptr: 0,
+        response_headers_ptr: 0,
+        response_headers_len_ptr: 0,
+        response_status_ptr: 0,
     };
     let wp = WasmParams {
         flows_user: v["flows_user"].as_str().unwrap().to_string(),
@@ -288,6 +322,9 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
         output_len_ptr: pp.output_len_ptr,
         response_ptr: pp.response_ptr,
         response_len_ptr: pp.response_len_ptr,
+        response_headers_ptr: pp.response_headers_ptr,
+        response_headers_len_ptr: pp.response_headers_len_ptr,
+        response_status_ptr: pp.response_status_ptr,
     };
     match run_wasm(wp).await {
         Ok(_) => match error_log_len[0] > 0 && error_log_ptr[0] > 0 {
@@ -345,6 +382,9 @@ async fn hook(
             output_len_ptr: 0,
             response_ptr: 0,
             response_len_ptr: 0,
+            response_headers_ptr: 0,
+            response_headers_len_ptr: 0,
+            response_status_ptr: 0,
         };
         let wp = WasmParams {
             flows_user: String::new(),
@@ -371,6 +411,9 @@ async fn hook(
             output_len_ptr: pp.output_len_ptr,
             response_ptr: pp.response_ptr,
             response_len_ptr: pp.response_len_ptr,
+            response_headers_ptr: pp.response_headers_ptr,
+            response_headers_len_ptr: pp.response_headers_len_ptr,
+            response_status_ptr: pp.response_status_ptr,
         };
         if let Err(_) = run_wasm(wp).await {
             return;
@@ -402,6 +445,9 @@ async fn hook(
                             output_len_ptr: 0,
                             response_ptr: 0,
                             response_len_ptr: 0,
+                            response_headers_ptr: 0,
+                            response_headers_len_ptr: 0,
+                            response_status_ptr: 0,
                         };
                         let wp = WasmParams {
                             flows_user: flow.flows_user,
@@ -419,6 +465,9 @@ async fn hook(
                             output_len_ptr: pp.output_len_ptr,
                             response_ptr: pp.response_ptr,
                             response_len_ptr: pp.response_len_ptr,
+                            response_headers_ptr: pp.response_headers_ptr,
+                            response_headers_len_ptr: pp.response_headers_len_ptr,
+                            response_status_ptr: pp.response_status_ptr,
                         };
                         info!(
                             r#""msg": {:?}, "flow": {:?}, "function": {:?}"#,
@@ -467,6 +516,9 @@ async fn lambda(
         output_len_ptr: 0,
         response_ptr: 0,
         response_len_ptr: 0,
+        response_headers_ptr: 0,
+        response_headers_len_ptr: 0,
+        response_status_ptr: 0,
     };
     let wp = WasmParams {
         flows_user: String::new(),
@@ -493,6 +545,9 @@ async fn lambda(
         output_len_ptr: pp.output_len_ptr,
         response_ptr: pp.response_ptr,
         response_len_ptr: pp.response_len_ptr,
+        response_headers_ptr: pp.response_headers_ptr,
+        response_headers_len_ptr: pp.response_headers_len_ptr,
+        response_status_ptr: pp.response_status_ptr,
     };
     if let Err(e) = run_wasm(wp).await {
         return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
@@ -518,6 +573,9 @@ async fn lambda(
                 let mut error_log_len = vec![0 as usize];
                 let mut response_ptr = vec![0 as usize];
                 let mut response_len = vec![0 as usize];
+                let mut response_headers_ptr = vec![0 as usize];
+                let mut response_headers_len = vec![0 as usize];
+                let mut response_status = vec![0 as usize];
                 let pp = PtrParams {
                     flows_ptr: 0,
                     flows_len_ptr: 0,
@@ -527,6 +585,9 @@ async fn lambda(
                     output_len_ptr: 0,
                     response_ptr: response_ptr.as_mut_ptr() as usize,
                     response_len_ptr: response_len.as_mut_ptr() as usize,
+                    response_headers_ptr: response_headers_ptr.as_mut_ptr() as usize,
+                    response_headers_len_ptr: response_headers_len.as_mut_ptr() as usize,
+                    response_status_ptr: response_status.as_mut_ptr() as usize,
                 };
                 let wp = WasmParams {
                     flows_user: flow.flows_user,
@@ -544,6 +605,9 @@ async fn lambda(
                     output_len_ptr: pp.output_len_ptr,
                     response_ptr: pp.response_ptr,
                     response_len_ptr: pp.response_len_ptr,
+                    response_headers_ptr: pp.response_headers_ptr,
+                    response_headers_len_ptr: pp.response_headers_len_ptr,
+                    response_status_ptr: pp.response_status_ptr,
                 };
                 info!(
                     r#""msg": {:?}, "flow": {:?}, "function": {:?}"#,
@@ -565,18 +629,41 @@ async fn lambda(
                     );
                 }
 
+                let mut res_status = 200 as u16;
+                if response_status[0] > 0 {
+                    res_status = response_status[0] as u16;
+                }
+
+                let mut response = vec![];
                 if response_ptr[0] > 0 && response_len[0] > 0 {
                     let r_len = response_len[0] as usize;
-                    let response = Vec::from_raw_parts(response_ptr[0] as *mut u8, r_len, r_len);
+                    response = Vec::from_raw_parts(response_ptr[0] as *mut u8, r_len, r_len);
                     // Prevent reconstruct vec from ptr when wp is droped
                     response_ptr[0] = 0;
                     response_len[0] = 0;
-
-                    return Ok((
-                        StatusCode::OK,
-                        String::from_utf8_lossy(&response).into_owned(),
-                    ));
                 }
+
+                let mut res_headers = vec![];
+                if response_headers_ptr[0] > 0 && response_headers_len[0] > 0 {
+                    let r_len = response_headers_len[0] as usize;
+                    let response_headers =
+                        Vec::from_raw_parts(response_headers_ptr[0] as *mut u8, r_len, r_len);
+                    // Prevent reconstruct vec from ptr when wp is droped
+                    response_headers_ptr[0] = 0;
+                    response_headers_len[0] = 0;
+
+                    if let Ok(response_headers) =
+                        serde_json::from_slice::<Vec<(String, String)>>(&response_headers)
+                    {
+                        res_headers = response_headers;
+                    }
+                }
+
+                return Ok((
+                    StatusCode::from_u16(res_status).unwrap_or(StatusCode::OK),
+                    AppendHeaders(res_headers),
+                    response,
+                ));
             }
         }
     }
