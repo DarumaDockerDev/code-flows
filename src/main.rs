@@ -1,8 +1,11 @@
 use axum::{
     body::Bytes,
     extract::{Path, Query},
-    http::StatusCode,
-    response::{AppendHeaders, IntoResponse},
+    http::{
+        header::{HeaderMap, HeaderName, HeaderValue},
+        StatusCode,
+    },
+    response::IntoResponse,
     routing::post,
     Json, Router,
 };
@@ -659,9 +662,18 @@ async fn lambda(
                     }
                 }
 
+                let mut h = HeaderMap::new();
+                for rh in res_headers.into_iter() {
+                    if let Ok(hn) = HeaderName::from_bytes(rh.0.as_bytes()) {
+                        if let Ok(hv) = HeaderValue::from_str(&rh.1) {
+                            h.insert(hn, hv);
+                        }
+                    }
+                }
+
                 return Ok((
                     StatusCode::from_u16(res_status).unwrap_or(StatusCode::OK),
-                    AppendHeaders(res_headers),
+                    h,
                     response,
                 ));
             }
