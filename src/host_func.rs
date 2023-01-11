@@ -6,6 +6,15 @@ use wasmedge_sdk::{
     async_host_function, error::HostFuncError, Caller, CallingFrame, ValType, WasmValue,
 };
 
+pub fn is_listening(
+    l: i32,
+) -> impl Fn(CallingFrame, Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> + Send + Sync + 'static
+{
+    move |_frame: wasmedge_sdk::CallingFrame, _args: Vec<wasmedge_sdk::WasmValue>| {
+        Ok(vec![WasmValue::from_i32(l)])
+    }
+}
+
 pub fn get_flows_user(
     flows_user: String,
 ) -> impl Fn(CallingFrame, Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> + Send + Sync + 'static

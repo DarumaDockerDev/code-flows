@@ -145,6 +145,10 @@ async fn run_wasm(wp: WasmParams) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     func_keys.push(func_key);
 
+    let (builder, func_key) =
+        builder.with_func::<(), i32>("is_listening", host_func::is_listening(wp.listening))?;
+    func_keys.push(func_key);
+
     let import = builder.build("env")?;
 
     let config = ConfigBuilder::new(CommonConfigOptions::default())
@@ -239,6 +243,7 @@ impl Drop for PtrParams {
 }
 
 struct WasmParams {
+    listening: i32,
     flows_user: String,
     flow_id: String,
     event_query: String,
@@ -309,12 +314,13 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
         response_status_ptr: 0,
     };
     let wp = WasmParams {
+        listening: 1,
         flows_user: v["flows_user"].as_str().unwrap().to_string(),
         flow_id: v["flow_id"].as_str().unwrap().to_string(),
         event_query: String::new(),
         event_body: Arc::new(Bytes::new()),
         wasm_file,
-        wasm_func: String::from("register"),
+        wasm_func: String::from("run"),
         wasm_env: get_env_file(v["flow_id"].as_str().unwrap()),
 
         flows_ptr: pp.flows_ptr,
@@ -390,6 +396,7 @@ async fn hook(
             response_status_ptr: 0,
         };
         let wp = WasmParams {
+            listening: 0,
             flows_user: String::new(),
             flow_id: String::new(),
             event_query: serde_json::to_string(&qry).unwrap(),
@@ -453,13 +460,14 @@ async fn hook(
                             response_status_ptr: 0,
                         };
                         let wp = WasmParams {
+                            listening: 0,
                             flows_user: flow.flows_user,
                             wasm_file,
                             wasm_env: get_env_file(&flow_id),
                             flow_id,
                             event_query: serde_json::to_string(&qry).unwrap(),
                             event_body: bytes.clone(),
-                            wasm_func: String::from("work"),
+                            wasm_func: String::from("run"),
                             flows_ptr: pp.flows_ptr,
                             flows_len_ptr: pp.flows_len_ptr,
                             error_log_ptr: pp.error_log_ptr,
@@ -474,7 +482,7 @@ async fn hook(
                         };
                         info!(
                             r#""msg": {:?}, "flow": {:?}, "function": {:?}"#,
-                            "Running function", flow.flow_id, "work"
+                            "Running function", flow.flow_id, "run"
                         );
                         _ = run_wasm(wp).await;
                         if error_log_len[0] > 0 && error_log_ptr[0] > 0 {
@@ -488,7 +496,7 @@ async fn hook(
                                 r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
                                 "function returned with error",
                                 flow.flow_id,
-                                "work",
+                                "run",
                                 String::from_utf8_lossy(&error_log).into_owned()
                             );
                         }
@@ -524,6 +532,7 @@ async fn lambda(
         response_status_ptr: 0,
     };
     let wp = WasmParams {
+        listening: 0,
         flows_user: String::new(),
         flow_id: String::new(),
         event_query: serde_json::to_string(&qry).unwrap(),
@@ -593,13 +602,14 @@ async fn lambda(
                     response_status_ptr: response_status.as_mut_ptr() as usize,
                 };
                 let wp = WasmParams {
+                    listening: 0,
                     flows_user: flow.flows_user,
                     wasm_file,
                     wasm_env: get_env_file(&flow_id),
                     flow_id,
                     event_query: serde_json::to_string(&qry).unwrap(),
                     event_body: bytes.clone(),
-                    wasm_func: String::from("work"),
+                    wasm_func: String::from("run"),
                     flows_ptr: pp.flows_ptr,
                     flows_len_ptr: pp.flows_len_ptr,
                     error_log_ptr: pp.error_log_ptr,
@@ -614,7 +624,7 @@ async fn lambda(
                 };
                 info!(
                     r#""msg": {:?}, "flow": {:?}, "function": {:?}"#,
-                    "Running function", flow.flow_id, "work"
+                    "Running function", flow.flow_id, "run"
                 );
                 _ = run_wasm(wp).await;
                 if error_log_len[0] > 0 && error_log_ptr[0] > 0 {
@@ -627,7 +637,7 @@ async fn lambda(
                         r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
                         "function returned with error",
                         flow.flow_id,
-                        "work",
+                        "run",
                         String::from_utf8_lossy(&error_log).into_owned()
                     );
                 }
