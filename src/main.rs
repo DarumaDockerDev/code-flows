@@ -10,9 +10,9 @@ use axum::{
     Json, Router,
 };
 use log::info;
+use reqwest::ClientBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fs::File;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{PathBuf, MAIN_SEPARATOR};
@@ -20,6 +20,7 @@ use std::process::{Command, ExitStatus};
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::{collections::HashMap, fs};
+use std::{fs::File, time::Duration};
 use wasmedge_sdk::{
     config::{CommonConfigOptions, ConfigBuilder, HostRegistrationConfigOptions},
     params, ImportObjectBuilder, Module, PluginManager, Vm, HOST_FUNCS,
@@ -449,6 +450,9 @@ async fn hook(
             tokio::spawn(async move {
                 if let Ok(flows) = serde_json::from_slice::<Vec<Flow>>(&flows) {
                     for flow in flows.into_iter() {
+                        if !valid_flow(&flow).await {
+                            continue;
+                        }
                         let wasm_file = match get_wasm_file(&flow.flow_id, false) {
                             Ok(f) => f,
                             Err(_) => continue,
@@ -561,6 +565,40 @@ async fn hook(
                 response,
             )
         },
+    }
+}
+
+// Check the flow's status
+// Bypass if status is not 'Running'
+// Inform Integration to revoke the flow if status is 'Deleted'
+async fn valid_flow(flow: &Flow) -> bool {
+    let client = ClientBuilder::new()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Can't build the reqwest client");
+
+    let url = format!(
+        "{}/_flows/status?user={}&flow={}",
+        std::env::var("FLOWS_PLATFORM_API_PREFIX").unwrap(),
+        flow.flows_user,
+        flow.flow_id
+    );
+
+    match client.get(url).send().await {
+        Ok(r) => {
+            let r: Value = r.json().await.unwrap_or_default();
+            match r.get("status") {
+                Some(s) => match s.as_str() {
+                    Some(s) => match s {
+                        "Running" => true,
+                        _ => false,
+                    },
+                    None => false,
+                },
+                None => false,
+            }
+        }
+        Err(_) => false,
     }
 }
 
