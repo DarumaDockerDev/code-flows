@@ -146,6 +146,12 @@ async fn run_wasm(wp: WasmParams) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     func_keys.push(func_key);
 
+    let (builder, func_key) = builder.with_func::<i32, ()>(
+        "set_error_code",
+        host_func::set_error_code(wp.error_code_ptr),
+    )?;
+    func_keys.push(func_key);
+
     let (builder, func_key) =
         builder.with_func::<(), i32>("is_listening", host_func::is_listening(wp.listening))?;
     func_keys.push(func_key);
@@ -194,6 +200,7 @@ struct PtrParams {
     response_headers_ptr: usize,
     response_headers_len_ptr: usize,
     response_status_ptr: usize,
+    error_code_ptr: usize,
 }
 
 impl Drop for PtrParams {
@@ -269,6 +276,7 @@ struct WasmParams {
     response_headers_ptr: usize,
     response_headers_len_ptr: usize,
     response_status_ptr: usize,
+    error_code_ptr: usize,
 }
 
 #[derive(Deserialize)]
@@ -304,6 +312,7 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
         };
     let mut error_log_ptr = vec![0 as usize];
     let mut error_log_len = vec![0 as usize];
+    let mut error_code = vec![0 as usize];
     let mut output_ptr = vec![0 as usize];
     let mut output_len = vec![0 as usize];
     let pp = PtrParams {
@@ -318,6 +327,7 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
         response_headers_ptr: 0,
         response_headers_len_ptr: 0,
         response_status_ptr: 0,
+        error_code_ptr: error_code.as_mut_ptr() as usize,
     };
     let wp = WasmParams {
         listening: 1,
@@ -340,6 +350,7 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
         response_headers_ptr: pp.response_headers_ptr,
         response_headers_len_ptr: pp.response_headers_len_ptr,
         response_status_ptr: pp.response_status_ptr,
+        error_code_ptr: pp.error_code_ptr,
     };
     match run_wasm(wp).await {
         Ok(_) => match error_log_len[0] > 0 && error_log_ptr[0] > 0 {
@@ -349,8 +360,9 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
                 // Prevent reconstruct vec from ptr when wp is dropped
                 error_log_ptr[0] = 0;
                 error_log_len[0] = 0;
+
                 (
-                    StatusCode::BAD_REQUEST,
+                    StatusCode::from_u16(error_code[0] as u16).unwrap_or(StatusCode::BAD_REQUEST),
                     String::from_utf8_lossy(&error_log).into_owned(),
                 )
             },
@@ -404,6 +416,7 @@ async fn hook(
         response_headers_ptr: response_headers_ptr.as_mut_ptr() as usize,
         response_headers_len_ptr: response_headers_len.as_mut_ptr() as usize,
         response_status_ptr: response_status.as_mut_ptr() as usize,
+        error_code_ptr: 0,
     };
     let wp = WasmParams {
         listening: 0,
@@ -434,6 +447,7 @@ async fn hook(
         response_headers_ptr: pp.response_headers_ptr,
         response_headers_len_ptr: pp.response_headers_len_ptr,
         response_status_ptr: pp.response_status_ptr,
+        error_code_ptr: pp.error_code_ptr,
     };
     if let Err(_) = run_wasm(wp).await {
         return (StatusCode::OK, HeaderMap::new(), vec![]);
@@ -460,6 +474,7 @@ async fn hook(
                         let flow_id = flow.flow_id.clone();
                         let mut error_log_ptr = vec![0 as usize];
                         let mut error_log_len = vec![0 as usize];
+                        let mut error_code = vec![0 as usize];
                         let pp = PtrParams {
                             flows_ptr: 0,
                             flows_len_ptr: 0,
@@ -472,6 +487,7 @@ async fn hook(
                             response_headers_ptr: 0,
                             response_headers_len_ptr: 0,
                             response_status_ptr: 0,
+                            error_code_ptr: error_code.as_mut_ptr() as usize,
                         };
                         let wp = WasmParams {
                             listening: 0,
@@ -493,6 +509,7 @@ async fn hook(
                             response_headers_ptr: pp.response_headers_ptr,
                             response_headers_len_ptr: pp.response_headers_len_ptr,
                             response_status_ptr: pp.response_status_ptr,
+                            error_code_ptr: pp.error_code_ptr,
                         };
                         info!(
                             r#""msg": {:?}, "flow": {:?}, "function": {:?}"#,
@@ -507,11 +524,12 @@ async fn hook(
                             error_log_ptr[0] = 0;
                             error_log_len[0] = 0;
                             info!(
-                                r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
+                                r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}, "error_code": {}"#,
                                 "function returned with error",
                                 flow.flow_id,
                                 "run",
-                                String::from_utf8_lossy(&error_log).into_owned()
+                                String::from_utf8_lossy(&error_log).into_owned(),
+                                error_code[0]
                             );
                         }
                     }
@@ -624,6 +642,7 @@ async fn lambda(
         response_headers_ptr: 0,
         response_headers_len_ptr: 0,
         response_status_ptr: 0,
+        error_code_ptr: 0,
     };
     let wp = WasmParams {
         listening: 0,
@@ -654,6 +673,7 @@ async fn lambda(
         response_headers_ptr: pp.response_headers_ptr,
         response_headers_len_ptr: pp.response_headers_len_ptr,
         response_status_ptr: pp.response_status_ptr,
+        error_code_ptr: pp.error_code_ptr,
     };
     if let Err(e) = run_wasm(wp).await {
         return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
@@ -677,6 +697,7 @@ async fn lambda(
                 let flow_id = flow.flow_id.clone();
                 let mut error_log_ptr = vec![0 as usize];
                 let mut error_log_len = vec![0 as usize];
+                let mut error_code = vec![0 as usize];
                 let mut response_ptr = vec![0 as usize];
                 let mut response_len = vec![0 as usize];
                 let mut response_headers_ptr = vec![0 as usize];
@@ -694,6 +715,7 @@ async fn lambda(
                     response_headers_ptr: response_headers_ptr.as_mut_ptr() as usize,
                     response_headers_len_ptr: response_headers_len.as_mut_ptr() as usize,
                     response_status_ptr: response_status.as_mut_ptr() as usize,
+                    error_code_ptr: error_code.as_mut_ptr() as usize,
                 };
                 let wp = WasmParams {
                     listening: 0,
@@ -715,6 +737,7 @@ async fn lambda(
                     response_headers_ptr: pp.response_headers_ptr,
                     response_headers_len_ptr: pp.response_headers_len_ptr,
                     response_status_ptr: pp.response_status_ptr,
+                    error_code_ptr: pp.error_code_ptr,
                 };
                 info!(
                     r#""msg": {:?}, "flow": {:?}, "function": {:?}"#,
@@ -728,11 +751,12 @@ async fn lambda(
                     error_log_ptr[0] = 0;
                     error_log_len[0] = 0;
                     info!(
-                        r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
+                        r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}, "error_code": {}"#,
                         "function returned with error",
                         flow.flow_id,
                         "run",
-                        String::from_utf8_lossy(&error_log).into_owned()
+                        String::from_utf8_lossy(&error_log).into_owned(),
+                        error_code[0]
                     );
                 }
 

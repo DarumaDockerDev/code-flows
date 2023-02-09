@@ -372,14 +372,37 @@ pub fn set_response_status(
             return Err(HostFuncError::User(1));
         }
 
-        let len = if args[0].ty() == ValType::I32 {
+        let status = if args[0].ty() == ValType::I32 {
             args[0].to_i32()
         } else {
             return Err(HostFuncError::User(2));
         };
 
         unsafe {
-            std::ptr::write(response_status_ptr as *mut u16, len as u16);
+            std::ptr::write(response_status_ptr as *mut u16, status as u16);
+        }
+
+        Ok(vec![])
+    }
+}
+
+pub fn set_error_code(
+    error_code_ptr: usize,
+) -> impl Fn(CallingFrame, Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> + Send + Sync + 'static
+{
+    move |_frame: wasmedge_sdk::CallingFrame, args: Vec<wasmedge_sdk::WasmValue>| {
+        if args.len() != 1 {
+            return Err(HostFuncError::User(1));
+        }
+
+        let code = if args[0].ty() == ValType::I32 {
+            args[0].to_i32()
+        } else {
+            return Err(HostFuncError::User(2));
+        };
+
+        unsafe {
+            std::ptr::write(error_code_ptr as *mut u16, code as u16);
         }
 
         Ok(vec![])
