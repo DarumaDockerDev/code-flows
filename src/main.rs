@@ -524,12 +524,11 @@ async fn hook(
                             error_log_ptr[0] = 0;
                             error_log_len[0] = 0;
                             info!(
-                                r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}, "error_code": {}"#,
+                                r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
                                 "function returned with error",
                                 flow.flow_id,
                                 "run",
                                 String::from_utf8_lossy(&error_log).into_owned(),
-                                error_code[0]
                             );
                         }
                     }
@@ -751,12 +750,11 @@ async fn lambda(
                     error_log_ptr[0] = 0;
                     error_log_len[0] = 0;
                     info!(
-                        r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}, "error_code": {}"#,
+                        r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
                         "function returned with error",
                         flow.flow_id,
                         "run",
                         String::from_utf8_lossy(&error_log).into_owned(),
-                        error_code[0]
                     );
                 }
 
