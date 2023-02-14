@@ -308,7 +308,13 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
     let wasm_file =
         match get_wasm_file(v["flow_id"].as_str().unwrap(), v["newly_built"].is_string()) {
             Ok(f) => f,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    [("content-type", "plain/text")],
+                    e.to_string(),
+                )
+            }
         };
     let mut error_log_ptr = vec![0 as usize];
     let mut error_log_len = vec![0 as usize];
@@ -361,8 +367,16 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
                 error_log_ptr[0] = 0;
                 error_log_len[0] = 0;
 
+                let content_type = match serde_json::from_slice::<Value>(&error_log) {
+                    Ok(v) => match v {
+                        Value::Array(_) | Value::Object(_) => "application/json",
+                        _ => "text/plain",
+                    },
+                    Err(_) => "text/plain",
+                };
                 (
                     StatusCode::from_u16(error_code[0] as u16).unwrap_or(StatusCode::BAD_REQUEST),
+                    [("content-type", content_type)],
                     String::from_utf8_lossy(&error_log).into_owned(),
                 )
             },
@@ -378,10 +392,22 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
                     },
                     false => String::new(),
                 };
-                (StatusCode::OK, out)
+
+                let content_type = match serde_json::from_str::<Value>(&out) {
+                    Ok(v) => match v {
+                        Value::Array(_) | Value::Object(_) => "application/json",
+                        _ => "text/plain",
+                    },
+                    Err(_) => "text/plain",
+                };
+                (StatusCode::OK, [("content-type", content_type)], out)
             }
         },
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [("content-type", "text/plain")],
+            e.to_string(),
+        ),
     }
 }
 
