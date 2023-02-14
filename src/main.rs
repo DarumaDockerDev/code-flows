@@ -549,12 +549,16 @@ async fn hook(
                             // Prevent reconstruct vec from ptr when wp is droped
                             error_log_ptr[0] = 0;
                             error_log_len[0] = 0;
+
+                            let log_value = match serde_json::from_slice::<Value>(&error_log) {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    Value::String(String::from_utf8_lossy(&error_log).into_owned())
+                                }
+                            };
                             info!(
-                                r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
-                                "function returned with error",
-                                flow.flow_id,
-                                "run",
-                                String::from_utf8_lossy(&error_log).into_owned(),
+                                r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {}"#,
+                                "function returned with error", flow.flow_id, "run", log_value,
                             );
                         }
                     }
@@ -775,12 +779,14 @@ async fn lambda(
                     // Prevent reconstruct vec from ptr when wp is droped
                     error_log_ptr[0] = 0;
                     error_log_len[0] = 0;
+
+                    let log_value = match serde_json::from_slice::<Value>(&error_log) {
+                        Ok(v) => v,
+                        Err(_) => Value::String(String::from_utf8_lossy(&error_log).into_owned()),
+                    };
                     info!(
-                        r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {:?}"#,
-                        "function returned with error",
-                        flow.flow_id,
-                        "run",
-                        String::from_utf8_lossy(&error_log).into_owned(),
+                        r#""msg": {:?}, "flow": {:?}, "function": {:?}, "error": {}"#,
+                        "function returned with error", flow.flow_id, "run", log_value
                     );
                 }
 
