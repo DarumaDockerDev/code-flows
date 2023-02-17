@@ -99,6 +99,18 @@ async fn run_wasm(wp: WasmParams) -> Result<(), Box<dyn std::error::Error>> {
     func_keys.push(func_key);
 
     let (builder, func_key) = builder.with_func::<(), i32>(
+        "get_event_headers_length",
+        host_func::get_event_headers_length(wp.event_headers.len() as i32),
+    )?;
+    func_keys.push(func_key);
+
+    let (builder, func_key) = builder.with_func::<i32, i32>(
+        "get_event_headers",
+        host_func::get_event_headers(wp.event_headers),
+    )?;
+    func_keys.push(func_key);
+
+    let (builder, func_key) = builder.with_func::<(), i32>(
         "get_event_query_length",
         host_func::get_event_query_length(wp.event_query.len() as i32),
     )?;
@@ -260,6 +272,7 @@ struct WasmParams {
     flows_user: String,
     flow_id: String,
     event_query: String,
+    event_headers: String,
     event_body: Arc<Bytes>,
     wasm_file: String,
     wasm_func: String,
@@ -340,6 +353,7 @@ async fn register(Query(v): Query<Value>) -> impl IntoResponse {
         flows_user: v["flows_user"].as_str().unwrap().to_string(),
         flow_id: v["flow_id"].as_str().unwrap().to_string(),
         event_query: String::new(),
+        event_headers: String::new(),
         event_body: Arc::new(Bytes::new()),
         wasm_file,
         wasm_func: String::from("run"),
@@ -417,6 +431,7 @@ async fn _challenge(bytes: Bytes) -> impl IntoResponse {
 }
 
 async fn hook(
+    headers: HeaderMap,
     Path((app, handler)): Path<(String, String)>,
     Query(qry): Query<HashMap<String, Value>>,
     bytes: Bytes,
@@ -444,11 +459,20 @@ async fn hook(
         response_status_ptr: response_status.as_mut_ptr() as usize,
         error_code_ptr: 0,
     };
+
+    let headers = headers.iter().fold(vec![], |mut acc, (key, value)| {
+        if let Ok(v) = value.to_str() {
+            acc.push((key.as_str().to_string(), v.to_string()));
+        }
+        acc
+    });
+
     let wp = WasmParams {
         listening: 0,
         flows_user: String::new(),
         flow_id: String::new(),
         event_query: serde_json::to_string(&qry).unwrap(),
+        event_headers: serde_json::to_string(&headers).unwrap(),
         event_body: bytes.clone(),
         wasm_file: [
             wasm_dir,
@@ -522,6 +546,7 @@ async fn hook(
                             wasm_env: get_env_file(&flow_id),
                             flow_id,
                             event_query: serde_json::to_string(&qry).unwrap(),
+                            event_headers: serde_json::to_string(&headers).unwrap(),
                             event_body: bytes.clone(),
                             wasm_func: String::from("run"),
                             flows_ptr: pp.flows_ptr,
@@ -650,6 +675,7 @@ async fn valid_flow(flow: &Flow) -> bool {
 }
 
 async fn lambda(
+    headers: HeaderMap,
     Path(l_key): Path<String>,
     Query(mut qry): Query<HashMap<String, Value>>,
     bytes: Bytes,
@@ -673,11 +699,20 @@ async fn lambda(
         response_status_ptr: 0,
         error_code_ptr: 0,
     };
+
+    let headers = headers.iter().fold(vec![], |mut acc, (key, value)| {
+        if let Ok(v) = value.to_str() {
+            acc.push((key.as_str(), v));
+        }
+        acc
+    });
+
     let wp = WasmParams {
         listening: 0,
         flows_user: String::new(),
         flow_id: String::new(),
         event_query: serde_json::to_string(&qry).unwrap(),
+        event_headers: serde_json::to_string(&headers).unwrap(),
         event_body: bytes.clone(),
         wasm_file: [
             wasm_dir,
@@ -753,6 +788,7 @@ async fn lambda(
                     wasm_env: get_env_file(&flow_id),
                     flow_id,
                     event_query: serde_json::to_string(&qry).unwrap(),
+                    event_headers: serde_json::to_string(&headers).unwrap(),
                     event_body: bytes.clone(),
                     wasm_func: String::from("run"),
                     flows_ptr: pp.flows_ptr,

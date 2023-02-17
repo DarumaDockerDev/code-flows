@@ -123,6 +123,39 @@ pub fn get_event_query(
     }
 }
 
+pub fn get_event_headers_length(
+    l: i32,
+) -> impl Fn(CallingFrame, Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> + Send + Sync + 'static
+{
+    move |_frame: wasmedge_sdk::CallingFrame, _args: Vec<wasmedge_sdk::WasmValue>| {
+        Ok(vec![WasmValue::from_i32(l)])
+    }
+}
+
+pub fn get_event_headers(
+    event_headers: String,
+) -> impl Fn(CallingFrame, Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> + Send + Sync + 'static
+{
+    move |frame: wasmedge_sdk::CallingFrame, args: Vec<wasmedge_sdk::WasmValue>| {
+        let caller = Caller::new(frame);
+        if args.len() != 1 {
+            return Err(HostFuncError::User(1));
+        }
+
+        let ptr = if args[0].ty() == ValType::I32 {
+            args[0].to_i32()
+        } else {
+            return Err(HostFuncError::User(2));
+        };
+
+        _ = caller
+            .memory(0)
+            .unwrap()
+            .write(event_headers.clone(), ptr as u32);
+        Ok(vec![WasmValue::from_i32(event_headers.len() as i32)])
+    }
+}
+
 pub fn set_flows(
     flows_ptr: usize,
     flows_len_ptr: usize,
