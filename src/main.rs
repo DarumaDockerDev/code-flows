@@ -74,10 +74,23 @@ fn get_env_file(flow_id: &str) -> String {
 }
 
 async fn run_wasm(wp: WasmParams) -> Result<(), Box<dyn std::error::Error>> {
+    let mut func_keys = vec![];
+    let r = run_wasm_inner(wp, &mut func_keys).await;
+
+    let mut hf = HOST_FUNCS.write();
+    for fk in func_keys.iter() {
+        hf.remove(fk);
+    }
+
+    r
+}
+
+async fn run_wasm_inner(
+    wp: WasmParams,
+    func_keys: &mut Vec<usize>,
+) -> Result<(), Box<dyn std::error::Error>> {
     PluginManager::load_from_default_paths();
     let module = Module::from_file(None, &wp.wasm_file)?;
-
-    let mut func_keys = vec![];
 
     // create an import module
     let (builder, func_key) = ImportObjectBuilder::new()
@@ -191,11 +204,6 @@ async fn run_wasm(wp: WasmParams) -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     drop(vm);
-
-    let mut hf = HOST_FUNCS.write();
-    for fk in func_keys.iter() {
-        hf.remove(fk);
-    }
 
     Ok(())
 }
